@@ -13,27 +13,97 @@ let lastDataReceivedTime = 0;
 let lastUptimeValue = -1;
 let watchdogInterval = null;
 
-// Helper: Tambah log ke tabel aktivitas
-function addActivityLog(msg, isError = false) {
+// ─────────────────────────────────────────
+//  PERSISTENT & DAY-CLASSIFIED LOG SYSTEM
+// ─────────────────────────────────────────
+const LOG_STORAGE_KEY = 'necis_activity_logs_v1';
+
+function getSavedLogs() {
+  try {
+    const raw = localStorage.getItem(LOG_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLogs(logs) {
+  try {
+    localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(logs));
+  } catch (e) {
+    console.error("Gagal menyimpan log ke localStorage", e);
+  }
+}
+
+function renderActivityLogs() {
   const logBody = document.getElementById('activityLog');
   if (!logBody) return;
-  const time = new Date().toLocaleTimeString();
-  const statusBadge = isError 
-    ? '<span class="badge bg-danger">GAGAL</span>' 
-    : '<span class="badge bg-success">OK</span>';
-  const row = `<tr>
-    <td style="padding:8px 12px; font-weight: 500;">${time}</td>
-    <td style="padding:8px 12px;">${msg}</td>
-    <td style="padding:8px 12px;">${statusBadge}</td>
-  </tr>`;
-  logBody.insertAdjacentHTML('afterbegin', row);
-  if (logBody.children.length > 25) logBody.lastElementChild.remove();
+
+  const logs = getSavedLogs();
+  if (logs.length === 0) {
+    logBody.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-4"><i class="fa-solid fa-inbox me-1"></i> Belum ada catatan aktivitas. Logs tersimpan otomatis.</td></tr>`;
+    return;
+  }
+
+  let html = '';
+  let lastDateGroup = '';
+
+  // Render logs (newest first)
+  logs.forEach(log => {
+    if (log.dateStr !== lastDateGroup) {
+      lastDateGroup = log.dateStr;
+      html += `
+        <tr class="table-light fw-bold" style="background: rgba(13, 110, 253, 0.08);">
+          <td colspan="3" style="padding: 8px 12px; color: var(--primary); font-size: 0.84rem;">
+            <i class="fa-regular fa-calendar-days me-2"></i>${log.dateStr}
+          </td>
+        </tr>`;
+    }
+
+    const statusBadge = log.isError 
+      ? '<span class="badge bg-danger">GAGAL</span>' 
+      : '<span class="badge bg-success">OK</span>';
+
+    html += `
+      <tr>
+        <td style="padding:8px 12px; font-weight: 500; font-size: 0.85rem; color: var(--gray-600);">${log.timeStr}</td>
+        <td style="padding:8px 12px; font-size: 0.88rem;">${log.msg}</td>
+        <td style="padding:8px 12px;">${statusBadge}</td>
+      </tr>`;
+  });
+
+  logBody.innerHTML = html;
+}
+
+function addActivityLog(msg, isError = false) {
+  const now = new Date();
+  const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+  const dateStr = now.toLocaleDateString('id-ID', dateOptions);
+  const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  const newEntry = {
+    id: Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+    timestamp: now.getTime(),
+    dateStr: dateStr,
+    timeStr: timeStr,
+    msg: msg,
+    isError: isError
+  };
+
+  const logs = getSavedLogs();
+  logs.unshift(newEntry);
+  if (logs.length > 200) logs.pop(); // Caps history at 200 items
+
+  saveLogs(logs);
+  renderActivityLogs();
   console.log(`[LOG] ${msg}`);
 }
 
 function clearActivityLogs() {
-  const logBody = document.getElementById('activityLog');
-  if (logBody) logBody.innerHTML = '';
+  if (confirm("Apakah Anda yakin ingin menghapus semua riwayat catatan aktivitas?")) {
+    localStorage.removeItem(LOG_STORAGE_KEY);
+    renderActivityLogs();
+  }
 }
 
 // Kirim perintah power / cycle ke Firebase
@@ -418,6 +488,8 @@ function setWiFi(ssid, password) {
 
 // Event Listeners DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
+  renderActivityLogs();
+
   if (typeof database === 'undefined') {
     console.error("Firebase database tidak terdefinisi. Periksa firebase-config.js");
     return;
