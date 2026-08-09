@@ -136,23 +136,12 @@ function updateTimerUI() {
     }
   }
 
-  // UV-C UI
-  if (uvcDisplay) uvcDisplay.innerText = `${uvcSecondsLeft}s`;
-  if (uvcBar) {
-    const pct = Math.round(((60 - uvcSecondsLeft) / 60) * 100);
-    uvcBar.style.width = `${uvcSecondsLeft > 0 ? (pct || 5) : 0}%`;
-  }
+  // UV-C UI (Always ON)
+  if (uvcDisplay) uvcDisplay.innerText = 'ON (Active)';
+  if (uvcBar) uvcBar.style.width = '100%';
   if (uvcBadge) {
-    if (isDeviceJammed) {
-      uvcBadge.className = 'badge bg-danger';
-      uvcBadge.innerText = 'JAMMED (PAUSED)';
-    } else if (uvcSecondsLeft > 0) {
-      uvcBadge.className = 'badge bg-info text-dark';
-      uvcBadge.innerText = 'STERILIZING';
-    } else {
-      uvcBadge.className = 'badge bg-secondary';
-      uvcBadge.innerText = 'OFF';
-    }
+    uvcBadge.className = 'badge bg-success';
+    uvcBadge.innerText = 'ALWAYS ON';
   }
 }
 
