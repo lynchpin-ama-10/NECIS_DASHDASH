@@ -200,16 +200,16 @@
                     </div>
                 </div>
 
-                <!-- Status Sterilisasi UV-C (Always ON) -->
+                <!-- Status Sterilisasi UV-C -->
                 <div class="col-lg-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header d-flex justify-content-between align-items-center">
                             <span><i class="fa-solid fa-sun text-warning me-2"></i> Status Sterilisasi UV-C</span>
-                            <span class="badge bg-success" id="uvcTimerBadge">ALWAYS ON</span>
+                            <span class="badge bg-secondary" id="uvcTimerBadge">OFF</span>
                         </div>
                         <div class="d-flex align-items-center justify-content-between py-3">
                             <div>
-                                <div class="display-6 fw-bold text-success" id="uvcTimerDisplay">ON (Active)</div>
+                                <div class="display-6 fw-bold text-dark" id="uvcTimerDisplay">OFF</div>
                                 <div class="text-muted small">Lampu UV-C Germicidal 275nm (Sterilisasi Kontinu)</div>
                             </div>
                             <div class="stat-icon green" style="width:54px; height:54px; font-size:1.4rem;">
@@ -217,7 +217,7 @@
                             </div>
                         </div>
                         <div class="progress" style="height: 10px; border-radius: 6px; background: var(--gray-200);">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" id="uvcProgressBar" role="progressbar" style="width: 100%;"></div>
+                            <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" id="uvcProgressBar" role="progressbar" style="width: 0%;"></div>
                         </div>
                     </div>
                 </div>

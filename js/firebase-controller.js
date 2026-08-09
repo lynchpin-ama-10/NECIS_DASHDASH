@@ -68,11 +68,10 @@ function clearJamAlertWeb() {
     });
 }
 
-// Control local timers matching ESP32 (Shredder 30s, UV-C 60s)
+// Control local timers matching ESP32 (Shredder 30s)
 function startLocalTimers() {
   stopLocalTimers();
   shredSecondsLeft = 30;
-  uvcSecondsLeft = 60;
   updateTimerUI();
 
   shredTimerInterval = setInterval(() => {
@@ -85,26 +84,12 @@ function startLocalTimers() {
       updateTimerUI();
     }
   }, 1000);
-
-  uvcTimerInterval = setInterval(() => {
-    if (!isDeviceJammed && uvcSecondsLeft > 0) {
-      uvcSecondsLeft--;
-      updateTimerUI();
-    } else if (uvcSecondsLeft <= 0) {
-      clearInterval(uvcTimerInterval);
-      uvcTimerInterval = null;
-      updateTimerUI();
-    }
-  }, 1000);
 }
 
 function stopLocalTimers() {
   if (shredTimerInterval) clearInterval(shredTimerInterval);
-  if (uvcTimerInterval) clearInterval(uvcTimerInterval);
   shredTimerInterval = null;
-  uvcTimerInterval = null;
   shredSecondsLeft = 0;
-  uvcSecondsLeft = 0;
   updateTimerUI();
 }
 
@@ -136,12 +121,12 @@ function updateTimerUI() {
     }
   }
 
-  // UV-C UI (Always ON)
-  if (uvcDisplay) uvcDisplay.innerText = 'ON (Active)';
+  // UV-C UI (ON / OFF status only — ON when device powered)
+  if (uvcDisplay) uvcDisplay.innerText = 'ON';
   if (uvcBar) uvcBar.style.width = '100%';
   if (uvcBadge) {
     uvcBadge.className = 'badge bg-success';
-    uvcBadge.innerText = 'ALWAYS ON';
+    uvcBadge.innerText = 'ON';
   }
 }
 
@@ -194,6 +179,17 @@ function setDeviceOfflineUI() {
   // Battery icon box styling when offline / 0%
   const batteryIconBox = document.getElementById('batteryIconBox');
   if (batteryIconBox) batteryIconBox.className = "stat-icon blue";
+
+  // UV-C UI when offline
+  const uvcDisplay = document.getElementById('uvcTimerDisplay');
+  const uvcBadge = document.getElementById('uvcTimerBadge');
+  const uvcBar = document.getElementById('uvcProgressBar');
+  if (uvcDisplay) uvcDisplay.innerText = "OFF";
+  if (uvcBadge) {
+    uvcBadge.className = "badge bg-secondary";
+    uvcBadge.innerText = "OFF";
+  }
+  if (uvcBar) uvcBar.style.width = "0%";
 
   currentWebState = false;
 }
