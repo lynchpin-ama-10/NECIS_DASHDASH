@@ -11,6 +11,7 @@ let isDeviceJammed = false;
 // Watchdog & Heartbeat tracking
 let lastDataReceivedTime = 0;
 let lastUptimeValue = -1;
+let isDeviceOnline = false;
 let watchdogInterval = null;
 
 // ─────────────────────────────────────────
@@ -206,6 +207,7 @@ function startHeartbeatWatchdog() {
   watchdogInterval = setInterval(() => {
     const now = Date.now();
     if (lastDataReceivedTime > 0 && (now - lastDataReceivedTime > 7000)) {
+      isDeviceOnline = false;
       setDeviceOfflineUI();
     }
   }, 2000);
@@ -246,9 +248,30 @@ function setDeviceOfflineUI() {
     motorStateBadge.innerText = "OFFLINE";
   }
 
-  // Battery icon box styling when offline / 0%
+  // Option B: Reset Battery & Voltage when offline
+  const batteryPercent = document.getElementById('batteryPercent');
+  const voltageDisplay = document.getElementById('voltageDisplay');
+  const batteryBar = document.getElementById('batteryBar');
   const batteryIconBox = document.getElementById('batteryIconBox');
+  if (batteryPercent) batteryPercent.innerText = "--";
+  if (voltageDisplay) voltageDisplay.innerText = "-- V";
+  if (batteryBar) {
+    batteryBar.style.width = "0%";
+    batteryBar.className = "sg-progress-bar bg-secondary";
+  }
   if (batteryIconBox) batteryIconBox.className = "stat-icon blue";
+
+  // Option B: Reset Needle count when offline
+  const needleCount = document.getElementById('needleCount');
+  if (needleCount) needleCount.innerText = "--";
+
+  // Telemetry when offline
+  const espUptime = document.getElementById('espUptime');
+  const signalStrength = document.getElementById('signalStrength');
+  const currentSSID = document.getElementById('currentSSID');
+  if (espUptime) espUptime.innerText = "--:--:--";
+  if (signalStrength) signalStrength.innerText = "-- dBm";
+  if (currentSSID) currentSSID.innerText = "Disconnected";
 
   // UV-C UI when offline
   const uvcDisplay = document.getElementById('uvcTimerDisplay');
@@ -279,13 +302,29 @@ function initFirebaseListeners() {
 
     // Check if heartbeat / uptime has actually updated
     const currentUptime = data.uptime !== undefined ? data.uptime : -1;
-    if (currentUptime !== lastUptimeValue) {
-      lastDataReceivedTime = Date.now();
+
+    // First snapshot received from Firebase upon page open:
+    if (lastUptimeValue === -1) {
       lastUptimeValue = currentUptime;
+      lastDataReceivedTime = Date.now();
+      // Initialize as offline until live packet increments uptime
+      isDeviceOnline = false;
+      setDeviceOfflineUI();
+      return;
     }
 
-    // Check if packet is too old
-    if (lastDataReceivedTime > 0 && (Date.now() - lastDataReceivedTime > 7000)) {
+    // Live update received: verify that uptime has changed
+    if (currentUptime !== lastUptimeValue && currentUptime >= 0) {
+      lastDataReceivedTime = Date.now();
+      lastUptimeValue = currentUptime;
+      isDeviceOnline = true;
+    } else if (Date.now() - lastDataReceivedTime > 7000) {
+      isDeviceOnline = false;
+      setDeviceOfflineUI();
+      return;
+    }
+
+    if (!isDeviceOnline) {
       setDeviceOfflineUI();
       return;
     }
@@ -489,6 +528,7 @@ function setWiFi(ssid, password) {
 // Event Listeners DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
   renderActivityLogs();
+  setDeviceOfflineUI();
 
   if (typeof database === 'undefined') {
     console.error("Firebase database tidak terdefinisi. Periksa firebase-config.js");
