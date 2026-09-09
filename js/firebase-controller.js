@@ -1,5 +1,7 @@
-// firebase-controller.js — NECIS Controller
-// Synchronized with ESP32 (NECIS_v2.ino) & Realtime Firebase
+// firebase-controller.js — NECIS Controller (FINAL)
+// 🔥 Latency, totalSent/totalFailed, dan successRate sekarang SEMUA
+// dihitung sekali oleh ESP32 dan dibaca apa adanya dari /stats — dashboard
+// tidak lagi menghitung ulang dengan metode sendiri (lihat NECIS_v2.ino).
 
 let currentWebState = false;
 let shredTimerInterval = null;
@@ -8,15 +10,20 @@ let shredSecondsLeft = 0;
 let uvcSecondsLeft = 0;
 let isDeviceJammed = false;
 
-// Watchdog & Heartbeat tracking
 let lastDataReceivedTime = 0;
 let lastUptimeValue = -1;
 let isDeviceOnline = false;
 let watchdogInterval = null;
 
-// ─────────────────────────────────────────
-//  PERSISTENT & DAY-CLASSIFIED LOG SYSTEM
-// ─────────────────────────────────────────
+// ============================================================
+//  STATISTIK
+// ============================================================
+let latencyHistory = [];
+let totalSent = 0;
+let totalFailed = 0;
+let reconnectCount = 0;
+
+// ── LOG SYSTEM ──
 const LOG_STORAGE_KEY = 'necis_activity_logs_v1';
 
 function getSavedLogs() {
@@ -32,56 +39,43 @@ function saveLogs(logs) {
   try {
     localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(logs));
   } catch (e) {
-    console.error("Gagal menyimpan log ke localStorage", e);
+    console.error("Gagal menyimpan log", e);
   }
 }
 
 function renderActivityLogs() {
   const logBody = document.getElementById('activityLog');
   if (!logBody) return;
-
   const logs = getSavedLogs();
   if (logs.length === 0) {
-    logBody.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-4"><i class="fa-solid fa-inbox me-1"></i> Belum ada catatan aktivitas. Logs tersimpan otomatis.</td></tr>`;
+    logBody.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-4"><i class="fa-solid fa-inbox me-1"></i> Belum ada catatan aktivitas.</td></tr>`;
     return;
   }
-
   let html = '';
   let lastDateGroup = '';
-
-  // Render logs (newest first)
   logs.forEach(log => {
     if (log.dateStr !== lastDateGroup) {
       lastDateGroup = log.dateStr;
-      html += `
-        <tr class="table-light fw-bold" style="background: rgba(13, 110, 253, 0.08);">
+      html += `<tr class="table-light fw-bold" style="background: rgba(13, 110, 253, 0.08);">
           <td colspan="3" style="padding: 8px 12px; color: var(--primary); font-size: 0.84rem;">
             <i class="fa-regular fa-calendar-days me-2"></i>${log.dateStr}
           </td>
         </tr>`;
     }
-
-    const statusBadge = log.isError 
-      ? '<span class="badge bg-danger">GAGAL</span>' 
-      : '<span class="badge bg-success">OK</span>';
-
-    html += `
-      <tr>
+    const badge = log.isError ? '<span class="badge bg-danger">GAGAL</span>' : '<span class="badge bg-success">OK</span>';
+    html += `<tr>
         <td style="padding:8px 12px; font-weight: 500; font-size: 0.85rem; color: var(--gray-600);">${log.timeStr}</td>
         <td style="padding:8px 12px; font-size: 0.88rem;">${log.msg}</td>
-        <td style="padding:8px 12px;">${statusBadge}</td>
+        <td style="padding:8px 12px;">${badge}</td>
       </tr>`;
   });
-
   logBody.innerHTML = html;
 }
 
 function addActivityLog(msg, isError = false) {
   const now = new Date();
-  const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-  const dateStr = now.toLocaleDateString('id-ID', dateOptions);
+  const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
   const newEntry = {
     id: Date.now() + '_' + Math.random().toString(36).substr(2, 4),
     timestamp: now.getTime(),
@@ -90,61 +84,48 @@ function addActivityLog(msg, isError = false) {
     msg: msg,
     isError: isError
   };
-
   const logs = getSavedLogs();
   logs.unshift(newEntry);
-  if (logs.length > 200) logs.pop(); // Caps history at 200 items
-
+  if (logs.length > 200) logs.pop();
   saveLogs(logs);
   renderActivityLogs();
   console.log(`[LOG] ${msg}`);
 }
 
 function clearActivityLogs() {
-  if (confirm("Apakah Anda yakin ingin menghapus semua riwayat catatan aktivitas?")) {
+  if (confirm("Hapus semua catatan aktivitas?")) {
     localStorage.removeItem(LOG_STORAGE_KEY);
     renderActivityLogs();
   }
 }
 
-// Kirim perintah power / cycle ke Firebase
+// ── Perintah ──
 function sendPowerCommand(state) {
-  const cmdRef = database.ref('/commands/power');
-  return cmdRef.set({ power: state })
+  database.ref('/commands/power').set({ power: state })
     .then(() => {
-      addActivityLog(`✅ Perintah daya ${state ? 'ON (Start Cycle)' : 'OFF'} terkirim ke Firebase`);
-      if (state) {
-        startLocalTimers();
-      } else {
-        stopLocalTimers();
-      }
+      addActivityLog(`✅ Perintah daya ${state ? 'ON' : 'OFF'} terkirim`);
+      if (state) startLocalTimers();
+      else stopLocalTimers();
     })
-    .catch(err => {
-      addActivityLog(`❌ Gagal kirim perintah: ${err.message}`, true);
-    });
+    .catch(err => addActivityLog(`❌ Gagal kirim perintah: ${err.message}`, true));
 }
 
-// Reset Anti-Jam alert dari website
 function clearJamAlertWeb() {
   database.ref('/alerts/jam').remove()
     .then(() => {
       database.ref('/commands/clearJam').set({ clearJam: true });
-      addActivityLog("✅ Perintah reset jam (Anti-Macet) dikirim ke alat");
-      const banner = document.getElementById('jamAlertBanner');
-      if (banner) banner.style.display = 'none';
+      addActivityLog("✅ Perintah reset jam dikirim");
+      document.getElementById('jamAlertBanner').style.display = 'none';
       isDeviceJammed = false;
     })
-    .catch(err => {
-      addActivityLog(`❌ Gagal reset jam: ${err.message}`, true);
-    });
+    .catch(err => addActivityLog(`❌ Gagal reset jam: ${err.message}`, true));
 }
 
-// Control local timers matching ESP32 (Shredder 30s)
+// ── Timer ──
 function startLocalTimers() {
   stopLocalTimers();
   shredSecondsLeft = 30;
   updateTimerUI();
-
   shredTimerInterval = setInterval(() => {
     if (!isDeviceJammed && shredSecondsLeft > 0) {
       shredSecondsLeft--;
@@ -165,427 +146,416 @@ function stopLocalTimers() {
 }
 
 function updateTimerUI() {
-  const shredDisplay = document.getElementById('shredderTimerDisplay');
-  const shredBadge = document.getElementById('shredderTimerBadge');
-  const shredBar = document.getElementById('shredderProgressBar');
+  const sd = document.getElementById('shredderTimerDisplay');
+  const sb = document.getElementById('shredderTimerBadge');
+  const sp = document.getElementById('shredderProgressBar');
+  const ud = document.getElementById('uvcTimerDisplay');
+  const ub = document.getElementById('uvcTimerBadge');
+  const up = document.getElementById('uvcProgressBar');
 
-  const uvcDisplay = document.getElementById('uvcTimerDisplay');
-  const uvcBadge = document.getElementById('uvcTimerBadge');
-  const uvcBar = document.getElementById('uvcProgressBar');
-
-  // Shredder UI
-  if (shredDisplay) shredDisplay.innerText = `${shredSecondsLeft}s`;
-  if (shredBar) {
+  if (sd) sd.innerText = `${shredSecondsLeft}s`;
+  if (sp) {
     const pct = Math.round(((30 - shredSecondsLeft) / 30) * 100);
-    shredBar.style.width = `${shredSecondsLeft > 0 ? (pct || 5) : 0}%`;
+    sp.style.width = `${shredSecondsLeft > 0 ? (pct || 5) : 0}%`;
   }
-  if (shredBadge) {
+  if (sb) {
     if (isDeviceJammed) {
-      shredBadge.className = 'badge bg-danger';
-      shredBadge.innerText = 'JAMMED (PAUSED)';
+      sb.className = 'badge bg-danger';
+      sb.innerText = 'JAMMED (PAUSED)';
     } else if (shredSecondsLeft > 0) {
-      shredBadge.className = 'badge bg-primary';
-      shredBadge.innerText = 'RUNNING';
+      sb.className = 'badge bg-primary';
+      sb.innerText = 'RUNNING';
     } else {
-      shredBadge.className = 'badge bg-secondary';
-      shredBadge.innerText = 'IDLE';
+      sb.className = 'badge bg-secondary';
+      sb.innerText = 'IDLE';
     }
   }
-
-  // UV-C UI (ON / OFF status only — ON when device powered)
-  if (uvcDisplay) uvcDisplay.innerText = 'ON';
-  if (uvcBar) uvcBar.style.width = '100%';
-  if (uvcBadge) {
-    uvcBadge.className = 'badge bg-success';
-    uvcBadge.innerText = 'ON';
+  if (ud) ud.innerText = 'ON';
+  if (up) up.style.width = '100%';
+  if (ub) {
+    ub.className = 'badge bg-success';
+    ub.innerText = 'ON';
   }
 }
 
-// Watchdog Timer: Set Device to Disconnected if no heartbeat received for >7 seconds
+// ── Watchdog ──
 function startHeartbeatWatchdog() {
   if (watchdogInterval) clearInterval(watchdogInterval);
   watchdogInterval = setInterval(() => {
-    const now = Date.now();
-    if (lastDataReceivedTime > 0 && (now - lastDataReceivedTime > 7000)) {
+    if (isDeviceOnline && lastDataReceivedTime > 0 && (Date.now() - lastDataReceivedTime > 10000)) {
       isDeviceOnline = false;
       setDeviceOfflineUI();
     }
-  }, 2000);
+  }, 1000);
 }
 
 function setDeviceOfflineUI() {
-  const iotStatusText = document.getElementById('iotStatusText');
-  const iotBadgeText = document.getElementById('iotBadgeText');
-  const iotBadge = document.getElementById('iotBadge');
-  const sidebarStatus = document.getElementById('sidebarStatus');
-
-  if (iotStatusText) iotStatusText.innerText = "Disconnected";
-  if (iotBadgeText) iotBadgeText.innerText = "Offline";
-  if (iotBadge) iotBadge.className = "badge-status offline";
-  if (sidebarStatus) sidebarStatus.className = "badge-status offline";
-
-  // Motor status cards update
-  const deviceStatusText = document.getElementById('deviceStatusText');
-  const motorSubtext = document.getElementById('motorSubtext');
-  const deviceBadgeText = document.getElementById('deviceBadgeText');
-  const deviceBadge = document.getElementById('deviceBadge');
-  const powerBadgeText = document.getElementById('powerBadgeText');
-  const powerBadge = document.getElementById('powerBadge');
-  const toggle = document.getElementById('powerToggle');
-  const motorIcon = document.getElementById('motorIcon');
-  const motorStateBadge = document.getElementById('motorStateBadge');
-
-  if (deviceStatusText) deviceStatusText.innerText = "OFF";
-  if (motorSubtext) motorSubtext.innerText = "Alat Disconnected";
-  if (deviceBadgeText) deviceBadgeText.innerText = "Disconnected";
-  if (deviceBadge) deviceBadge.className = "badge-status offline";
-  if (powerBadgeText) powerBadgeText.innerText = "OFFLINE";
-  if (powerBadge) powerBadge.className = "badge-status offline";
-  if (toggle) toggle.checked = false;
-  if (motorIcon) motorIcon.className = "fa-solid fa-gear text-secondary";
-  if (motorStateBadge) {
-    motorStateBadge.className = "badge bg-secondary";
-    motorStateBadge.innerText = "OFFLINE";
-  }
-
-  // Option B: Reset Battery & Voltage when offline
-  const batteryPercent = document.getElementById('batteryPercent');
-  const voltageDisplay = document.getElementById('voltageDisplay');
-  const batteryBar = document.getElementById('batteryBar');
-  const batteryIconBox = document.getElementById('batteryIconBox');
-  if (batteryPercent) batteryPercent.innerText = "--";
-  if (voltageDisplay) voltageDisplay.innerText = "-- V";
-  if (batteryBar) {
-    batteryBar.style.width = "0%";
-    batteryBar.className = "sg-progress-bar bg-secondary";
-  }
-  if (batteryIconBox) batteryIconBox.className = "stat-icon blue";
-
-  // Option B: Reset Needle count when offline
-  const needleCount = document.getElementById('needleCount');
-  if (needleCount) needleCount.innerText = "--";
-
-  // Telemetry when offline
-  const espUptime = document.getElementById('espUptime');
-  const signalStrength = document.getElementById('signalStrength');
-  const currentSSID = document.getElementById('currentSSID');
-  if (espUptime) espUptime.innerText = "--:--:--";
-  if (signalStrength) signalStrength.innerText = "-- dBm";
-  if (currentSSID) currentSSID.innerText = "Disconnected";
-
-  // UV-C UI when offline
-  const uvcDisplay = document.getElementById('uvcTimerDisplay');
-  const uvcBadge = document.getElementById('uvcTimerBadge');
-  const uvcBar = document.getElementById('uvcProgressBar');
-  if (uvcDisplay) uvcDisplay.innerText = "OFF";
-  if (uvcBadge) {
-    uvcBadge.className = "badge bg-secondary";
-    uvcBadge.innerText = "OFF";
-  }
-  if (uvcBar) uvcBar.style.width = "0%";
-
+  const ids = ['iotStatusText','iotBadgeText','iotBadge','sidebarStatus','deviceStatusText','motorSubtext',
+               'deviceBadgeText','deviceBadge','powerBadgeText','powerBadge','motorIcon','motorStateBadge',
+               'batteryPercent','voltageDisplay','batteryBar','batteryIconBox','needleCount','espUptime',
+               'signalStrength','currentSSID','uvcTimerDisplay','uvcTimerBadge','uvcProgressBar',
+               'avgLatency','minLatency','maxLatency','successRate','successCount','reconnectCount','lastReconnect'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'iotStatusText') el.innerText = 'Disconnected';
+    else if (id === 'iotBadgeText') el.innerText = 'Offline';
+    else if (id === 'iotBadge' || id === 'deviceBadge' || id === 'powerBadge' || id === 'sidebarStatus') el.className = 'badge-status offline';
+    else if (id === 'deviceStatusText') el.innerText = 'OFF';
+    else if (id === 'motorSubtext') el.innerText = 'Alat Disconnected';
+    else if (id === 'deviceBadgeText') el.innerText = 'Disconnected';
+    else if (id === 'powerBadgeText') el.innerText = 'OFFLINE';
+    else if (id === 'motorIcon') el.className = 'fa-solid fa-gear text-secondary';
+    else if (id === 'motorStateBadge') { el.className = 'badge bg-secondary'; el.innerText = 'OFFLINE'; }
+    else if (id === 'batteryPercent') el.innerText = '--';
+    else if (id === 'voltageDisplay') el.innerText = '-- V';
+    else if (id === 'batteryBar') { el.style.width = '0%'; el.className = 'sg-progress-bar bg-secondary'; }
+    else if (id === 'batteryIconBox') el.className = 'stat-icon blue';
+    else if (id === 'needleCount') el.innerText = '--';
+    else if (id === 'espUptime') el.innerText = '--:--:--';
+    else if (id === 'signalStrength') el.innerText = '-- dBm';
+    else if (id === 'currentSSID') el.innerText = 'Disconnected';
+    else if (id === 'uvcTimerDisplay') el.innerText = 'OFF';
+    else if (id === 'uvcTimerBadge') { el.className = 'badge bg-secondary'; el.innerText = 'OFF'; }
+    else if (id === 'uvcProgressBar') el.style.width = '0%';
+    else if (['avgLatency','minLatency','maxLatency','successRate','reconnectCount','lastReconnect'].includes(id)) el.innerText = '--';
+    else if (id === 'successCount') el.innerText = '0 / 0 percobaan';
+  });
+  document.getElementById('powerToggle').checked = false;
   currentWebState = false;
 }
 
-// Inisialisasi listener data sensor (realtime)
+// ============================================================
+//  FUNGSI STATISTIK
+// ============================================================
+
+// 🔥 Latency: update tampilan
+function updateLatencyUI(history) {
+  if (history.length === 0) {
+    document.getElementById('avgLatency').innerText = '--';
+    document.getElementById('minLatency').innerText = '--';
+    document.getElementById('maxLatency').innerText = '--';
+    return;
+  }
+  const avg = history.reduce((a, b) => a + b, 0) / history.length;
+  const min = Math.min(...history);
+  const max = Math.max(...history);
+
+  // Jika lebih dari 5 detik, tidak masuk akal → tampilkan --
+  if (avg > 5000 || avg <= 0) {
+    document.getElementById('avgLatency').innerText = '--';
+    document.getElementById('minLatency').innerText = '--';
+    document.getElementById('maxLatency').innerText = '--';
+    return;
+  }
+
+  document.getElementById('avgLatency').innerText = Math.round(avg) + ' ms';
+  document.getElementById('minLatency').innerText = Math.round(min) + ' ms';
+  document.getElementById('maxLatency').innerText = Math.round(max) + ' ms';
+}
+
+// 🔥 Success rate — pakai angka dari ESP32 kalau ada (serverRate),
+// fallback ke perhitungan lokal hanya kalau field itu belum terkirim.
+function updateSuccessRate(serverRate) {
+  const successful = totalSent - totalFailed;
+  const rate = (typeof serverRate === 'number')
+    ? serverRate
+    : (totalSent > 0 ? (successful / totalSent * 100) : 0);
+  document.getElementById('successRate').innerText = rate.toFixed(1);
+  document.getElementById('successCount').innerText = successful + ' / ' + totalSent + ' percobaan';
+}
+
+// 🔥 Latency — langsung dari data.latency yang dikirim ESP32
+// (round-trip time PATCH yang sebenarnya), bukan hasil hitungan sendiri.
+function updatePushLatency(latencyMs) {
+  if (typeof latencyMs !== 'number' || latencyMs < 0) {
+    document.getElementById('avgLatency').innerText = '--';
+    document.getElementById('minLatency').innerText = '--';
+    document.getElementById('maxLatency').innerText = '--';
+    return;
+  }
+  latencyHistory.push(latencyMs);
+  if (latencyHistory.length > 30) latencyHistory.shift();
+  updateLatencyUI(latencyHistory);
+}
+
+// 🔥 Listener tambahan
+function initAdditionalListeners() {
+  // Satu listener untuk /stats: totalSent, totalFailed, successRate, dan
+  // latency semua di-update BERSAMAAN (ESP32 mengirimnya dalam satu PATCH),
+  // jadi dashboard tidak pernah menampilkan kombinasi angka yang tanggung.
+  database.ref('/stats').on('value', snap => {
+    const s = snap.val() || {};
+    totalSent = s.totalSent || 0;
+    totalFailed = s.totalFailed || 0;
+    updateSuccessRate(s.successRate);
+    updatePushLatency(s.latency);
+  });
+  database.ref('/status/wifiReconnectCount').on('value', snap => {
+    reconnectCount = snap.val() || 0;
+    document.getElementById('reconnectCount').innerText = reconnectCount;
+  });
+  database.ref('/status/lastReconnectTime').on('value', snap => {
+    const ts = snap.val();
+    if (ts) {
+      if (ts < 10000000000) {
+        const sec = Math.floor(ts / 1000);
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        document.getElementById('lastReconnect').innerText = `${h}h ${m}m ${s}s`;
+      } else {
+        document.getElementById('lastReconnect').innerText = new Date(ts).toLocaleString('id-ID');
+      }
+    } else {
+      document.getElementById('lastReconnect').innerText = '--';
+    }
+  });
+}
+
+// ============================================================
+//  LISTENER UTAMA /sensors
+// ============================================================
 function initFirebaseListeners() {
   startHeartbeatWatchdog();
-
   const sensorsRef = database.ref('/sensors');
   sensorsRef.on('value', (snapshot) => {
     const data = snapshot.val();
     if (!data) {
-      addActivityLog("⚠️ Menunggu sinyal awal dari ESP32...", false);
+      addActivityLog("⚠️ Menunggu sinyal dari ESP32...", false);
       setDeviceOfflineUI();
       return;
     }
 
-    // Check if heartbeat / uptime has actually updated
+    // Heartbeat
     const currentUptime = data.uptime !== undefined ? data.uptime : -1;
-
-    // First snapshot received from Firebase upon page open:
-    if (lastUptimeValue === -1) {
-      lastUptimeValue = currentUptime;
-      lastDataReceivedTime = Date.now();
-      // Initialize as offline until live packet increments uptime
-      isDeviceOnline = false;
-      setDeviceOfflineUI();
-      return;
-    }
-
-    // Live update received: verify that uptime has changed
-    if (currentUptime !== lastUptimeValue && currentUptime >= 0) {
+    if (currentUptime !== lastUptimeValue) {
       lastDataReceivedTime = Date.now();
       lastUptimeValue = currentUptime;
       isDeviceOnline = true;
-    } else if (Date.now() - lastDataReceivedTime > 7000) {
+    } else if (Date.now() - lastDataReceivedTime > 10000) {
       isDeviceOnline = false;
       setDeviceOfflineUI();
       return;
     }
-
     if (!isDeviceOnline) {
       setDeviceOfflineUI();
       return;
     }
 
-    // 1. Update Battery & Voltage
+    // ========== UPDATE UI ==========
+    // UV-C
+    document.getElementById('uvcTimerDisplay').innerText = 'ON';
+    document.getElementById('uvcTimerBadge').className = 'badge bg-success';
+    document.getElementById('uvcTimerBadge').innerText = 'ON';
+    document.getElementById('uvcProgressBar').style.width = '100%';
+
+    // Battery
     const battery = data.battery !== undefined ? data.battery : 0;
     const voltage = data.voltage || 0;
-    
     document.getElementById('batteryPercent').innerText = battery;
-    document.getElementById('voltageDisplay').innerText = (voltage).toFixed(1) + ' V';
-    
-    const batteryBar = document.getElementById('batteryBar');
-    const batteryIconBox = document.getElementById('batteryIconBox');
-    if (batteryBar) {
-      batteryBar.style.width = battery + '%';
+    document.getElementById('voltageDisplay').innerText = voltage.toFixed(1) + ' V';
+    const bar = document.getElementById('batteryBar');
+    const iconBox = document.getElementById('batteryIconBox');
+    if (bar) {
+      bar.style.width = battery + '%';
       if (battery > 50) {
-        batteryBar.className = "sg-progress-bar bg-success";
-        if (batteryIconBox) batteryIconBox.className = "stat-icon green";
+        bar.className = 'sg-progress-bar bg-success';
+        if (iconBox) iconBox.className = 'stat-icon green';
       } else if (battery > 20) {
-        batteryBar.className = "sg-progress-bar bg-warning";
-        if (batteryIconBox) batteryIconBox.className = "stat-icon cyan";
+        bar.className = 'sg-progress-bar bg-warning';
+        if (iconBox) iconBox.className = 'stat-icon cyan';
       } else {
-        batteryBar.className = "sg-progress-bar bg-danger";
-        if (batteryIconBox) batteryIconBox.className = "stat-icon red";
+        bar.className = 'sg-progress-bar bg-danger';
+        if (iconBox) iconBox.className = 'stat-icon red';
       }
     }
 
-    // 2. Needle count
+    // Needle
     document.getElementById('needleCount').innerText = data.needleCount || 0;
 
-    // 3. Motor status (dari ESP32)
+    // Motor
     const motorOn = data.motorStatus === true;
-    document.getElementById('deviceStatusText').innerText = motorOn ? "ON" : "OFF";
-    document.getElementById('powerBadgeText').innerText = motorOn ? "RUNNING" : "STANDBY";
+    document.getElementById('deviceStatusText').innerText = motorOn ? 'ON' : 'OFF';
+    document.getElementById('powerBadgeText').innerText = motorOn ? 'RUNNING' : 'STANDBY';
     document.getElementById('powerBadge').className = `badge-status ${motorOn ? 'online' : 'offline'}`;
-    
-    const deviceBadgeText = document.getElementById('deviceBadgeText');
-    const deviceBadge = document.getElementById('deviceBadge');
-    const motorSubtext = document.getElementById('motorSubtext');
-    const motorStateBadge = document.getElementById('motorStateBadge');
+
+    const badgeText = document.getElementById('deviceBadgeText');
+    const badge = document.getElementById('deviceBadge');
+    const subtext = document.getElementById('motorSubtext');
+    const stateBadge = document.getElementById('motorStateBadge');
 
     if (motorOn) {
-      if (deviceBadgeText) deviceBadgeText.innerText = "Active";
-      if (deviceBadge) deviceBadge.className = "badge-status online";
-      if (motorSubtext) motorSubtext.innerText = "Shredder Running";
-      if (motorStateBadge) {
-        motorStateBadge.className = "badge bg-primary fw-semibold";
-        motorStateBadge.innerText = "SHREDDING";
-      }
+      if (badgeText) badgeText.innerText = 'Active';
+      if (badge) badge.className = 'badge-status online';
+      if (subtext) subtext.innerText = 'Shredder Running';
+      if (stateBadge) { stateBadge.className = 'badge bg-primary fw-semibold'; stateBadge.innerText = 'SHREDDING'; }
     } else {
-      if (deviceBadgeText) deviceBadgeText.innerText = "Standby";
-      if (deviceBadge) deviceBadge.className = "badge-status online";
-      if (motorSubtext) motorSubtext.innerText = "Motor Siap (Standby)";
-      if (motorStateBadge) {
-        motorStateBadge.className = "badge bg-secondary";
-        motorStateBadge.innerText = "IDLE";
-      }
+      if (badgeText) badgeText.innerText = 'Standby';
+      if (badge) badge.className = 'badge-status online';
+      if (subtext) subtext.innerText = 'Motor Siap (Standby)';
+      if (stateBadge) { stateBadge.className = 'badge bg-secondary'; stateBadge.innerText = 'IDLE'; }
     }
 
-    const motorIcon = document.getElementById('motorIcon');
-    if (motorIcon) {
-      if (motorOn) {
-        motorIcon.className = 'fa-solid fa-gear fa-spin text-primary';
-      } else {
-        motorIcon.className = 'fa-solid fa-gear text-secondary';
-      }
+    const icon = document.getElementById('motorIcon');
+    if (icon) {
+      icon.className = motorOn ? 'fa-solid fa-gear fa-spin text-primary' : 'fa-solid fa-gear text-secondary';
     }
 
-    // Toggle switch sync
     const toggle = document.getElementById('powerToggle');
-    if (toggle && toggle.checked !== motorOn) {
-      toggle.checked = motorOn;
-    }
+    if (toggle && toggle.checked !== motorOn) toggle.checked = motorOn;
     currentWebState = motorOn;
 
-    // Trigger local timers if motor turned ON remotely and timers aren't running
     if (motorOn && shredSecondsLeft === 0 && !isDeviceJammed) {
       startLocalTimers();
     }
 
-    // 4. IoT Connection — Verified Active Heartbeat
-    document.getElementById('iotStatusText').innerText = "Connected";
-    document.getElementById('iotBadgeText').innerText = "Online";
-    document.getElementById('iotBadge').className = "badge-status online";
-    const sidebarStatus = document.getElementById('sidebarStatus');
-    if (sidebarStatus) sidebarStatus.className = "badge-status online";
+    // IoT status
+    document.getElementById('iotStatusText').innerText = 'Connected';
+    document.getElementById('iotBadgeText').innerText = 'Online';
+    document.getElementById('iotBadge').className = 'badge-status online';
+    document.getElementById('sidebarStatus').className = 'badge-status online';
 
-    // 5. Telemetri
+    // Telemetri
     if (data.wifiSSID) {
-      const ssidElem = document.getElementById('currentSSID');
-      if (ssidElem) ssidElem.innerText = data.wifiSSID;
+      const el = document.getElementById('currentSSID');
+      if (el) el.innerText = data.wifiSSID;
     }
     if (data.rssi) {
-      const signalElem = document.getElementById('signalStrength');
-      if (signalElem) signalElem.innerText = data.rssi + " dBm";
+      const el = document.getElementById('signalStrength');
+      if (el) el.innerText = data.rssi + ' dBm';
     }
     if (data.uptime !== undefined) {
-      const uptimeElem = document.getElementById('espUptime');
-      if (uptimeElem) {
-        const hours = Math.floor(data.uptime / 3600);
-        const minutes = Math.floor((data.uptime % 3600) / 60);
-        const seconds = Math.floor(data.uptime % 60);
-        uptimeElem.innerText = `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+      const el = document.getElementById('espUptime');
+      if (el) {
+        const h = Math.floor(data.uptime / 3600);
+        const m = Math.floor((data.uptime % 3600) / 60);
+        const s = Math.floor(data.uptime % 60);
+        el.innerText = `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
       }
     }
+
+    // Catatan: latency sekarang datang lewat listener /stats
+    // (initAdditionalListeners → updatePushLatency), bukan dari sini.
 
   }, (error) => {
     addActivityLog(`Error sensor: ${error.message}`, true);
     setDeviceOfflineUI();
   });
 
-  // 6. Listener Alert Anti-Jam (/alerts/jam)
+  // Anti-Jam
   database.ref('/alerts/jam').on('value', (snap) => {
     const alertData = snap.val();
     const banner = document.getElementById('jamAlertBanner');
-    const retryCountElem = document.getElementById('jamRetryCount');
-    const motorSubtext = document.getElementById('motorSubtext');
-    const motorStateBadge = document.getElementById('motorStateBadge');
+    const retryElem = document.getElementById('jamRetryCount');
+    const subtext = document.getElementById('motorSubtext');
+    const stateBadge = document.getElementById('motorStateBadge');
 
-    if (alertData && alertData.status === "JAM_STUCK") {
+    if (alertData && alertData.status === 'JAM_STUCK') {
       isDeviceJammed = true;
       if (banner) banner.style.display = 'block';
-      if (retryCountElem) retryCountElem.innerText = `Retries: ${alertData.retries || 0} / 5`;
-      if (motorSubtext) motorSubtext.innerText = "Motor Macet! Auto Reverse";
-      if (motorStateBadge) {
-        motorStateBadge.className = "badge bg-danger fw-bold";
-        motorStateBadge.innerText = "JAMMED";
-      }
+      if (retryElem) retryElem.innerText = `Retries: ${alertData.retries || 0} / 5`;
+      if (subtext) subtext.innerText = 'Motor Macet! Auto Reverse';
+      if (stateBadge) { stateBadge.className = 'badge bg-danger fw-bold'; stateBadge.innerText = 'JAMMED'; }
       addActivityLog(`⚠️ ALARM ANTI-JAM: Motor tersumbat! (Retry ${alertData.retries || 0})`, true);
       updateTimerUI();
     } else {
       isDeviceJammed = false;
       if (banner) banner.style.display = 'none';
-      if (motorSubtext && !currentWebState) motorSubtext.innerText = "Motor Siap (Standby)";
-      if (motorStateBadge && !currentWebState) {
-        motorStateBadge.className = "badge bg-secondary";
-        motorStateBadge.innerText = "IDLE";
-      }
+      if (subtext && !currentWebState) subtext.innerText = 'Motor Siap (Standby)';
+      if (stateBadge && !currentWebState) { stateBadge.className = 'badge bg-secondary'; stateBadge.innerText = 'IDLE'; }
       updateTimerUI();
     }
   });
 
-  // 7. Listener status WiFi
+  // Status WiFi
   database.ref('/status/wifi').on('value', (snap) => {
     const status = snap.val();
-    const wifiDiv = document.getElementById('wifiStatus');
-    if (!wifiDiv) return;
-    if (status === "connecting") {
-      wifiDiv.innerHTML = '<span class="text-warning small">⏳ Menghubungkan ke WiFi baru...</span>';
-      wifiDiv.style.display = 'block';
-    } else if (status === "connected") {
-      wifiDiv.innerHTML = '<span class="text-success small">✅ WiFi berhasil diubah!</span>';
-      wifiDiv.style.display = 'block';
-      setTimeout(() => wifiDiv.style.display = 'none', 3500);
-    } else if (status === "failed") {
-      wifiDiv.innerHTML = '<span class="text-danger small">❌ Gagal terhubung ke WiFi baru.</span>';
-      wifiDiv.style.display = 'block';
+    const div = document.getElementById('wifiStatus');
+    if (!div) return;
+    if (status === 'connecting') {
+      div.innerHTML = '<span class="text-warning small">⏳ Menghubungkan ke WiFi baru...</span>';
+      div.style.display = 'block';
+    } else if (status === 'connected') {
+      div.innerHTML = '<span class="text-success small">✅ WiFi berhasil diubah!</span>';
+      div.style.display = 'block';
+      setTimeout(() => div.style.display = 'none', 3500);
+    } else if (status === 'failed') {
+      div.innerHTML = '<span class="text-danger small">❌ Gagal terhubung ke WiFi baru.</span>';
+      div.style.display = 'block';
     } else {
-      wifiDiv.style.display = 'none';
+      div.style.display = 'none';
     }
   });
 }
 
-// Reset needle count
+// ── Fungsi lainnya ──
 function resetNeedle() {
   database.ref('/commands/resetNeedle').set({ resetNeedle: true })
-    .then(() => addActivityLog("📌 Perintah reset needle dikirim"))
+    .then(() => addActivityLog('📌 Perintah reset needle dikirim'))
     .catch(err => addActivityLog(`Gagal reset needle: ${err.message}`, true));
 }
 
-// Restart ESP32
 function restartESP() {
-  if (confirm("Restart ESP32? Sistem akan terputus sejenak.")) {
+  if (confirm('Restart ESP32?')) {
     database.ref('/commands/restart').set({ restart: true })
-      .then(() => addActivityLog("🔄 Perintah restart ESP32 dikirim"))
+      .then(() => addActivityLog('🔄 Perintah restart ESP32 dikirim'))
       .catch(err => addActivityLog(`Gagal restart: ${err.message}`, true));
   }
 }
 
-// Konfigurasi WiFi
 function setWiFi(ssid, password) {
-  if (!ssid) {
-    alert("Nama SSID WiFi wajib diisi!");
-    return false;
-  }
-  database.ref('/commands/wifi').set({ ssid: ssid, password: password })
+  if (!ssid) { alert('SSID wajib diisi!'); return false; }
+  database.ref('/commands/wifi').set({ ssid, password })
     .then(() => {
-      addActivityLog(`📡 Perintah ganti WiFi ke "${ssid}" dikirim. ESP32 akan restart`);
-      const wifiDiv = document.getElementById('wifiStatus');
-      if (wifiDiv) {
-        wifiDiv.innerHTML = '<span class="text-info small">📡 Mengirim konfigurasi, ESP32 restart...</span>';
-        wifiDiv.style.display = 'block';
+      addActivityLog(`📡 Perintah ganti WiFi ke "${ssid}" dikirim`);
+      const div = document.getElementById('wifiStatus');
+      if (div) {
+        div.innerHTML = '<span class="text-info small">📡 Mengirim konfigurasi, ESP32 restart...</span>';
+        div.style.display = 'block';
       }
     })
-    .catch(err => {
-      addActivityLog(`Gagal kirim WiFi: ${err.message}`, true);
-    });
+    .catch(err => addActivityLog(`Gagal kirim WiFi: ${err.message}`, true));
   return true;
 }
 
-// Event Listeners DOM Ready
+// ============================================================
+//  DOM READY
+// ============================================================
 document.addEventListener('DOMContentLoaded', () => {
   renderActivityLogs();
   setDeviceOfflineUI();
 
   if (typeof database === 'undefined') {
-    console.error("Firebase database tidak terdefinisi. Periksa firebase-config.js");
+    console.error('Firebase tidak terdefinisi.');
     return;
   }
 
   initFirebaseListeners();
+  initAdditionalListeners();
 
-  // Power Toggle
-  const powerToggle = document.getElementById('powerToggle');
-  if (powerToggle) {
-    powerToggle.addEventListener('change', (e) => {
-      sendPowerCommand(e.target.checked);
-    });
-  }
+  document.getElementById('powerToggle')?.addEventListener('change', e => sendPowerCommand(e.target.checked));
+  document.getElementById('startCycleBtn')?.addEventListener('click', () => sendPowerCommand(true));
+  document.getElementById('resetNeedleBtn')?.addEventListener('click', resetNeedle);
+  document.getElementById('reconnectBtn')?.addEventListener('click', restartESP);
 
-  // Start Cycle Button
-  const startCycleBtn = document.getElementById('startCycleBtn');
-  if (startCycleBtn) {
-    startCycleBtn.addEventListener('click', () => {
-      sendPowerCommand(true);
-    });
-  }
+  document.getElementById('wifiForm')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const ssid = document.getElementById('wifiSSID').value.trim();
+    const pass = document.getElementById('wifiPassword').value;
+    setWiFi(ssid, pass);
+  });
 
-  // Reset Needle Button
-  const resetBtn = document.getElementById('resetNeedleBtn');
-  if (resetBtn) resetBtn.addEventListener('click', resetNeedle);
+  document.getElementById('togglePassBtn')?.addEventListener('click', () => {
+    const inp = document.getElementById('wifiPassword');
+    if (inp.type === 'password') {
+      inp.type = 'text';
+      document.getElementById('togglePassBtn').innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+    } else {
+      inp.type = 'password';
+      document.getElementById('togglePassBtn').innerHTML = '<i class="fa-solid fa-eye"></i>';
+    }
+  });
 
-  // Reconnect / Restart ESP Button
-  const reconnectBtn = document.getElementById('reconnectBtn');
-  if (reconnectBtn) reconnectBtn.addEventListener('click', restartESP);
-
-  // WiFi Form
-  const wifiForm = document.getElementById('wifiForm');
-  if (wifiForm) {
-    wifiForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const ssid = document.getElementById('wifiSSID').value.trim();
-      const password = document.getElementById('wifiPassword').value;
-      setWiFi(ssid, password);
-    });
-  }
-
-  // Toggle Password Visibility
-  const togglePassBtn = document.getElementById('togglePassBtn');
-  if (togglePassBtn) {
-    togglePassBtn.addEventListener('click', () => {
-      const passInput = document.getElementById('wifiPassword');
-      if (passInput.type === 'password') {
-        passInput.type = 'text';
-        togglePassBtn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
-      } else {
-        passInput.type = 'password';
-        togglePassBtn.innerHTML = '<i class="fa-solid fa-eye"></i>';
-      }
-    });
-  }
-
-  addActivityLog("Dashboard NECIS Siap. Menghubungkan ke Firebase...");
+  addActivityLog('Dashboard NECIS Siap.');
 });

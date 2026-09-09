@@ -7,11 +7,8 @@
     <meta name="description"
         content="NECIS — Sistem Monitoring & Kontrol IoT Alat Penghancur Jarum Medis Berbasis ESP32.">
     <title>Dashboard — NECIS</title>
-    <!-- Bootstrap 5.3 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- FontAwesome 6 -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-    <!-- Custom CSS -->
     <link href="css/style.css" rel="stylesheet">
 </head>
 
@@ -39,14 +36,10 @@
         <div class="sidebar-header">Menu Dashboard</div>
         <ul class="sidebar-menu">
             <li><a href="index.html" class="active"><i class="fa-solid fa-gauge-high"></i> Dashboard</a></li>
-            <li><a href="#statusAlat" onclick="scrollToSection('statusAlat')"><i class="fa-solid fa-microchip"></i>
-                    Status Alat</a></li>
-            <li><a href="#timerSection" onclick="scrollToSection('timerSection')"><i class="fa-solid fa-stopwatch"></i>
-                    Timer Sterilisasi</a></li>
-            <li><a href="#kontrolIoT" onclick="scrollToSection('kontrolIoT')"><i class="fa-solid fa-sliders"></i>
-                    Kontrol IoT</a></li>
-            <li><a href="#wifiConfig" onclick="scrollToSection('wifiConfig')"><i class="fa-solid fa-wifi"></i>
-                    Konfigurasi WiFi</a></li>
+            <li><a href="#statusAlat" onclick="scrollToSection('statusAlat')"><i class="fa-solid fa-microchip"></i> Status Alat</a></li>
+            <li><a href="#timerSection" onclick="scrollToSection('timerSection')"><i class="fa-solid fa-stopwatch"></i> Timer Sterilisasi</a></li>
+            <li><a href="#kontrolIoT" onclick="scrollToSection('kontrolIoT')"><i class="fa-solid fa-sliders"></i> Kontrol IoT</a></li>
+            <li><a href="#wifiConfig" onclick="scrollToSection('wifiConfig')"><i class="fa-solid fa-wifi"></i> Konfigurasi WiFi</a></li>
         </ul>
         <div class="sidebar-divider"></div>
         <div class="sidebar-header">Navigasi</div>
@@ -65,7 +58,7 @@
     <!-- ===== MAIN CONTENT ===== -->
     <main class="sg-main">
 
-        <!-- Banner Peringatan Jam / Anti-Macet (Hidden by Default) -->
+        <!-- Banner Peringatan Jam / Anti-Macet -->
         <div id="jamAlertBanner" class="alert alert-danger shadow-sm mb-4 border-0 animate-in" style="display: none; background: linear-gradient(135deg, #ef4444, #dc2626); color: white; border-radius: 12px;">
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 p-2">
                 <div class="d-flex align-items-center gap-3">
@@ -92,7 +85,6 @@
         <!-- Status Cards -->
         <section id="statusAlat">
             <div class="row g-3 mb-4">
-                <!-- Status Motor & Anti-Jam -->
                 <div class="col-xl-3 col-md-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header d-flex justify-content-between align-items-center">
@@ -115,7 +107,6 @@
                     </div>
                 </div>
 
-                <!-- Status Koneksi IoT -->
                 <div class="col-xl-3 col-md-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header">Koneksi IoT Firebase</div>
@@ -134,7 +125,6 @@
                     </div>
                 </div>
 
-                <!-- Baterai (3S LiPo 11.1V - 12.6V) -->
                 <div class="col-xl-3 col-md-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header d-flex justify-content-between align-items-center">
@@ -154,7 +144,6 @@
                     </div>
                 </div>
 
-                <!-- Jarum Dihancurkan -->
                 <div class="col-xl-3 col-md-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header">Jarum Dihancurkan</div>
@@ -175,10 +164,56 @@
             </div>
         </section>
 
-        <!-- Timer Section (Shredder 30s & UV-C 60s) -->
+        <!-- ========================================================= -->
+        <!--  🆕 STATISTIK IoT (RESPON, SUKSES, RECONNECT)             -->
+        <!-- ========================================================= -->
+        <section class="mb-4">
+            <div class="row g-3">
+                <!-- Card 1: Waktu Respon Dashboard -->
+                <div class="col-md-4">
+                    <div class="sg-card animate-in h-100">
+                        <div class="sg-card-header"><i class="fa-solid fa-gauge-high"></i> Waktu Respon (Latency)</div>
+                        <div class="d-flex justify-content-around text-center">
+                            <div><span class="stat-label">Rata-rata</span><br><span class="fw-bold" id="avgLatency">--</span></div>
+                            <div><span class="stat-label">Min</span><br><span class="fw-bold" id="minLatency">--</span></div>
+                            <div><span class="stat-label">Max</span><br><span class="fw-bold" id="maxLatency">--</span></div>
+                        </div>
+                        <div class="small text-muted mt-2">ms (dari ESP32 ke tampilan)</div>
+                    </div>
+                </div>
+
+                <!-- Card 2: Keberhasilan Pengiriman Data -->
+                <div class="col-md-4">
+                    <div class="sg-card animate-in h-100">
+                        <div class="sg-card-header"><i class="fa-solid fa-check-circle"></i> Keberhasilan Kirim</div>
+                        <div class="text-center">
+                            <span class="stat-value" id="successRate" style="font-size:2rem;">--</span>
+                            <span class="stat-label">% Sukses</span>
+                        </div>
+                        <div class="text-center small text-muted" id="successCount">0 / 0 percobaan</div>
+                    </div>
+                </div>
+
+                <!-- Card 3: Reconnect WiFi -->
+                <div class="col-md-4">
+                    <div class="sg-card animate-in h-100">
+                        <div class="sg-card-header"><i class="fa-solid fa-wifi"></i> Reconnect WiFi</div>
+                        <div class="d-flex justify-content-between">
+                            <span class="stat-label">Total Reconnect</span>
+                            <span class="fw-bold" id="reconnectCount">--</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span class="stat-label">Terakhir</span>
+                            <span class="fw-bold" id="lastReconnect">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Timer Section -->
         <section id="timerSection" class="mb-4">
             <div class="row g-3">
-                <!-- Shredder Timer (30s) -->
                 <div class="col-lg-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header d-flex justify-content-between align-items-center">
@@ -200,7 +235,6 @@
                     </div>
                 </div>
 
-                <!-- Status Sterilisasi UV-C -->
                 <div class="col-lg-6">
                     <div class="sg-card animate-in h-100">
                         <div class="sg-card-header d-flex justify-content-between align-items-center">
@@ -383,7 +417,7 @@
     <script src="js/app.js"></script>
     <script src="js/firebase-controller.js"></script>
 
-    <!-- Live Auto-Reload Script for Local Development -->
+    <!-- Live Auto-Reload -->
     <script>
         (function() {
             let lastModified = null;
