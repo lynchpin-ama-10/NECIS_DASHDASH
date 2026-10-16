@@ -22,7 +22,6 @@ let latencyHistory = [];
 let totalSent = 0;
 let totalFailed = 0;
 let reconnectCount = 0;
-
 // ── LOG SYSTEM ──
 const LOG_STORAGE_KEY = 'necis_activity_logs_v1';
 

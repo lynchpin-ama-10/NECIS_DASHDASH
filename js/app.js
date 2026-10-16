@@ -1,4 +1,4 @@
-// app.js
+    // app.js
 document.addEventListener('DOMContentLoaded', () => {
     const hamburger = document.getElementById('hamburgerBtn');
     const sidebar = document.querySelector('.sg-sidebar');
